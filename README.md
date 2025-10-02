@@ -42,7 +42,7 @@ Ele é ideal para:
 | Recurso | Descrição |
 | :--- | :--- |
 | 🚀 **Desempenho Extremo** | Utiliza sockets TCP de baixo nível e serialização binária com `pickle` (muito mais rápido que JSON/HTTP para IPC), além de pooling de conexões para latência mínima. |
-| ✨ **API Simples e Elegante** | Defina seus serviços usando classes e decoradores Python intuitivos como `@syn.meu_endpoint`. A lógica fica limpa, organizada e fácil de entender. |
+| ✨ **API Simples e Elegante** | Defina seus serviços usando classes e decoradores Python intuitivos como `@meta.meu_endpoint`. A lógica fica limpa, organizada e fácil de entender. |
 | 🏃‍♂️ **Execução em Background** | Os serviços rodam como processos *daemon* independentes, não bloqueando sua aplicação principal. |
 | 🌐 **Descoberta Automática** | Não se preocupe com portas ou endereços IP. Os serviços são registrados por nome e podem ser encontrados de qualquer lugar do seu projeto. |
 | 🔄 **Concorrência Integrada** | O servidor utiliza um pool de threads para lidar com múltiplas requisições de clientes simultaneamente, sem esforço extra. |
@@ -83,10 +83,10 @@ Crie um arquivo para o seu serviço (ex: `service_daemon.py`). Use decoradores p
 ```python
 # service_daemon.py
 import asyncio
-import metabridge as syn
+import metabridge as meta
 
 # 1. Crie um serviço e marque-o para rodar como daemon
-@syn.create("demo-service").daemon()
+@meta.create("demo-service").daemon()
 class Service:
     """
     Uma classe que agrupa os endpoints do nosso serviço.
@@ -96,15 +96,15 @@ class Service:
         self.argumento = argumento
 
     # 2. Exponha métodos com decoradores simples e diretos
-    @syn.teste  # Cria um endpoint chamado 'teste'
+    @meta.teste  # Cria um endpoint chamado 'teste'
     def home(self) -> str:
         return "Mensagem da home do serviço!"
 
-    @syn.function  # Usa o nome da própria função ('get') como nome do endpoint
+    @meta.function  # Usa o nome da própria função ('get') como nome do endpoint
     def get(self, outro_argumento: str) -> str:
         return f"{self.argumento} {outro_argumento}"
 
-    @syn.function # Usa o nome da própria função ('soma') como nome do endpoint
+    @meta.function # Usa o nome da própria função ('soma') como nome do endpoint
     async def soma(self, a: int, b: int) -> str:
         # Funções async são suportadas e executadas de forma síncrona
         await asyncio.sleep(0.01)
@@ -112,7 +112,7 @@ class Service:
 
 # 3. Inicie o serviço em background.
 # O serviço começará a rodar assim que este módulo for importado.
-handle = syn.run()
+handle = meta.run()
 
 # O código abaixo é opcional, apenas para manter o processo principal vivo
 if __name__ == "__main__":
@@ -133,12 +133,12 @@ Agora, em outro arquivo (sua aplicação principal, por exemplo), conecte-se e u
 
 # 1. Importe o módulo do serviço para garantir que ele seja iniciado
 import service_daemon
-import metabridge as syn
+import metabridge as meta
 
 if __name__ == "__main__":
     # 2. Conecte-se ao serviço pelo nome, passando argumentos para o __init__ da classe
     print("Conectando ao 'demo-service'...")
-    client = syn.connect("demo-service", argumento="Olá,")
+    client = meta.connect("demo-service", argumento="Olá,")
 
     # 3. Chame os métodos remotos como se fossem locais
     print(f"Resposta de 'teste()': {client.teste()}")
@@ -174,7 +174,7 @@ Resposta de 'soma(10, 20)': A soma é: 30
 | `metabridge.run()` | Inicia o serviço definido mais recentemente em um processo daemon e retorna um `DaemonHandle` para controlá-lo. |
 | `metabridge.connect(name, ...)` | Conecta-se a um serviço em execução pelo `name` e retorna um cliente proxy. Argumentos adicionais são passados para o `__init__` da classe do serviço. |
 | `@metabridge.endpoint(name)` | O decorador base para expor um método de classe com um nome customizado. |
-| `@syn.[nome_do_endpoint]` | Atalho dinâmico para `@endpoint("nome_do_endpoint")`. Por exemplo, `@syn.teste` é o mesmo que `@endpoint("teste")`. |
+| `@metabridge.[nome_do_endpoint]` | Atalho dinâmico para `@endpoint("nome_do_endpoint")`. Por exemplo, `@meta.teste` é o mesmo que `@endpoint("teste")`. |
 | `@metabridge.function` | Um decorador especial que usa o nome da própria função como o nome do endpoint. É o mesmo que usar `@endpoint()` sem argumentos. |
 
 ---

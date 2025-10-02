@@ -6,11 +6,11 @@ import time
 import threading
 import statistics as stats
 
-import metabridge as syn
+import metabridge as meta
 import service_daemon
 
 def bench_latency(n=200):
-    c = syn.connect("demo-service", argumento="ping", timeout=3.0)
+    c = meta.connect("demo-service", argumento="ping", timeout=3.0)
 
     # warmup
     for _ in range(20):
@@ -36,7 +36,7 @@ def bench_throughput(concurrency=16, duration=2.0):
     counts = [0] * concurrency
 
     def worker(i):
-        c = syn.connect("demo-service", argumento="pong", timeout=3.0)
+        c = meta.connect("demo-service", argumento="pong", timeout=3.0)
         while time.perf_counter() < stop:
             c.get()
             counts[i] += 1

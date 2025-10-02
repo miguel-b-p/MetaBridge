@@ -40,20 +40,20 @@ def endpoint(name: Optional[str] = None) -> Callable[[Callable[..., Any]], Calla
 
 def __getattr__(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
-    Provides dynamic decorators for endpoints (e.g., @syn.teste, @syn.function).
+    Provides dynamic decorators for endpoints (e.g., @meta.teste, @meta.function).
     This is part of the public API and is triggered for any attribute not
     explicitly defined in this module.
     """
     if name.startswith("_"):
         raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
-    # For @syn.function, the endpoint name is derived from the function name.
+    # For @meta.function, the endpoint name is derived from the function name.
     if name == "function":
         def function_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             return _mark_endpoint(func, None)
         return function_decorator
 
-    # For any other name (e.g., @syn.teste), the attribute name becomes the endpoint name.
+    # For any other name (e.g., @meta.teste), the attribute name becomes the endpoint name.
     def name_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         return _mark_endpoint(func, name)
     return name_decorator

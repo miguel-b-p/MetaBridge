@@ -14,12 +14,12 @@ def bench_latency(n=200):
 
     # warmup
     for _ in range(20):
-        c.get()
+        c.get("warmup")
     
     times = []
     for _ in range(n):
         t0 = time.perf_counter()
-        c.get()
+        c.get("warmup")
         times.append((time.perf_counter() - t0) * 1e3)
     
     return {
@@ -38,7 +38,7 @@ def bench_throughput(concurrency=16, duration=2.0):
     def worker(i):
         c = meta.connect("demo-service", argumento="pong", timeout=3.0)
         while time.perf_counter() < stop:
-            c.get()
+            c.get("warmup")
             counts[i] += 1
 
     threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(concurrency)]

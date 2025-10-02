@@ -1,0 +1,4 @@
+.venv
+__pycache__
+shell.nix
+metabridge_ipc.egg-info

@@ -187,4 +187,4 @@ Contribuições são bem-vindas! Se você encontrar um bug ou tiver uma sugestã
 
 ## Licença
 
-Este projeto está licenciado sob a Licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
+Este projeto está licenciado sob a Licença **Apache License, Version 2.0** Veja o arquivo [LICENSE](LICENSE) para mais detalhes.

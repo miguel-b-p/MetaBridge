@@ -1,3 +1,4 @@
+# src/__init__.py
 """MetaBridge - High-performance in-memory service pipes for intra-project function calls."""
 from __future__ import annotations
 
@@ -60,9 +61,9 @@ def __getattr__(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]
 class _ServiceRegistration:
     """Holds metadata about a declared MetaBridge service."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, host: Optional[str] = None) -> None:
         self.name = name
-        self._builder = create_service(name)
+        self._builder = create_service(name, host=host)
         self._daemon_builder: Optional[DaemonServiceBuilder] = None
         self._class: Optional[type] = None
         self._seen_endpoints: set[str] = set()
@@ -134,11 +135,11 @@ def _annotate_endpoint(func: Callable[..., Any], owner: type, attr_name: str, de
 _SERVICE_REGISTRY: Dict[str, _ServiceRegistration] = {}
 _LAST_REGISTRATION: Optional[_ServiceRegistration] = None
 
-def create(name: str) -> _ServiceRegistration:
+def create(name: str, host: Optional[str] = None) -> _ServiceRegistration:
     """Create (or retrieve) a MetaBridge service registration for the given name."""
     registration = _SERVICE_REGISTRY.get(name)
     if registration is None:
-        registration = _ServiceRegistration(name)
+        registration = _ServiceRegistration(name, host=host)
         _SERVICE_REGISTRY[name] = registration
     global _LAST_REGISTRATION
     _LAST_REGISTRATION = registration

@@ -1,14 +1,16 @@
-"""Client example consuming a MetaBridge daemon service."""
-from __future__ import annotations
-
 import metabridge as meta
 
+# 1. Importe o módulo do serviço para garantir sua inicialização
 import service_daemon
 
-# Importa o serviço para garantir que ele está rodando em background.
-
 if __name__ == "__main__":
-    client = meta.connect("demo-service", argumento='Olá')
-    print(client.teste())
-    print(client.get("mundo!"))
-    print(client.soma(10, 20))
+    print("Conectando ao serviço 'demo-service'...")
+    
+    # 2. Use 'with' para garantir que a conexão e seus recursos sejam liberados
+    with meta.connect("demo-service", argumento="Olá,") as client:
+        # 3. Execute métodos remotos como se fossem locais
+        print(f"Resposta do endpoint 'teste()': {client.teste()}")
+        print(f"Resposta do endpoint 'get('mundo!')': {client.get('mundo!')}")
+        print(f"Resposta do endpoint 'soma(10, 20)': {client.soma(10, 20)}")
+    
+    print("Cliente finalizado. A conexão foi fechada.")

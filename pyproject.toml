@@ -2,6 +2,26 @@
 requires = ["setuptools>=42"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "metabridge-ipc"
+version = "0.1.0"
+description = "High-performance in-memory service pipes for intra-project function calls."
+authors = [{ name = "miguel-b-p", email = "miguelpinotty@gmail.com" }]
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: Apache License 2.0",
+    "Intended Audience :: Developers",
+]
+dependencies = ["msgpack"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.ruff]
 line-length = 120
 

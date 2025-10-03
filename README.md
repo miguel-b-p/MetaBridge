@@ -44,7 +44,7 @@ Imagine que você precisa executar uma tarefa computacionalmente intensiva - com
 
 | Recurso | Benefício |
 | :--- | :--- |
-| 🚀 **Desempenho Excepcional** | Utiliza sockets TCP de baixo nível e serialização binária com `pickle` (significativamente mais rápido que JSON/HTTP para IPC), combinado com pooling de conexões para latência mínima. |
+| 🚀 **Desempenho Excepcional** | A arquitetura é focada em latência mínima e alto throughput, combinando várias otimizações:<br>  - **Sockets TCP & Pooling:** Comunicação direta via sockets TCP com um pool de conexões thread-safe para reutilização e agilidade.<br>  - **Serialização com `msgpack`:** Protocolo binário rápido e compacto, muito superior ao JSON/HTTP para IPC.<br>  - **Cache LRU O(1):** O servidor utiliza um cache LRU (Least Recently Used) de altíssima performance (`O(1)`) para instâncias de serviço, garantindo que chamadas repetidas para os mesmos objetos sejam atendidas instantaneamente, sem gargalos. |
 | ✨ **API Intuitiva e Elegante** | Defina seus serviços usando classes Python e decoradores simples como `@meta.meu_endpoint`. Código limpo, organizado e fácil de manter. |
 | 🏃‍♂️ **Execução em Background** | Serviços rodam como processos *daemon* independentes, liberando sua aplicação principal para outras tarefas. |
 | 🌐 **Descoberta Automática** | Esqueça configurações complexas de portas e endereços. Os serviços são registrados por nome e descobertos automaticamente. |
@@ -59,7 +59,7 @@ O MetaBridge combina tecnologias Python de alto desempenho em uma arquitetura co
 1.  **Servidor TCP Otimizado**: Cada serviço criado com `@create(...).daemon()` opera em um processo dedicado com um servidor de socket TCP de alta eficiência.
 2.  **Registro Centralizado**: Um registro compartilhado entre processos (via `multiprocessing.Manager`) mantém o mapeamento de todos os serviços ativos e suas localizações.
 3.  **Cliente Inteligente**: Ao conectar com `metabridge.connect("nome-do-servico")`, o cliente consulta o registro, localiza o serviço e estabelece uma conexão TCP, criando um proxy transparente.
-4.  **Comunicação Eficiente**: Chamadas de método no cliente são serializadas com `pickle`, transmitidas via socket, executadas no servidor e os resultados retornam pelo mesmo canal - tudo de forma transparente.
+4.  **Comunicação Eficiente**: Chamadas de método no cliente são serializadas com **`msgpack`**, transmitidas via socket, executadas no servidor e os resultados retornam pelo mesmo canal - tudo de forma transparente.
 
 Esta arquitetura elimina a sobrecarga de protocolos mais pesados como HTTP, proporcionando uma experiência de comunicação quase tão rápida quanto uma chamada de função local.
 
@@ -185,7 +185,7 @@ class PublicAPI:
 meta.run()
 ```
 
-> **Atenção**: Expor um serviço na rede pode ter implicações de segurança. Como o `pickle` é usado para serialização, apenas exponha serviços em redes confiáveis e para clientes autorizados.
+> **Atenção**: Expor um serviço na rede tem implicações de segurança. Certifique-se de que sua rede é confiável e que apenas clientes autorizados possam se conectar ao serviço.
 
 -----
 
@@ -193,7 +193,7 @@ meta.run()
 
 | Função / Decorador | Propósito |
 | :--- | :--- |
-| `metabridge.create(name, host=None)` | Cria a definição de um serviço. Opcionalmente, especifica um `host` para o servidor (padrão: '12-7.0.0.1'). |
+| `metabridge.create(name, host=None)` | Cria a definição de um serviço. Opcionalmente, especifica um `host` para o servidor (padrão: '127.0.0.1'). |
 | `.daemon()` | Especifica que o serviço deve ser executado como um processo daemon. |
 | `metabridge.run()` | Inicia o serviço mais recentemente definido em background, retornando um `DaemonHandle` para controle. |
 | `metabridge.connect(name, ...)` | Conecta a um serviço ativo, retornando um cliente proxy. Recomenda-se usar em um bloco `with`. |

@@ -6,15 +6,17 @@ import asyncio
 import atexit
 import multiprocessing
 import os
-import pickle
 import socket
 import struct
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.context import BaseContext
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+import msgpack
 
 from .config import DEFAULT_HOST
 from .exceptions import MetaBridgeError, ServiceNotFound
@@ -72,40 +74,32 @@ class _FunctionFactory:
 
 
 class _InstanceMethodFactory:
-    def __init__(self, cls: type, attr_name: str, max_size: int = 128) -> None:
-        from weakref import WeakValueDictionary
+    """Efficient LRU cache for service class instances."""
 
+    def __init__(self, cls: type, attr_name: str, max_size: int = 128) -> None:
         self._cls = cls
         self._attr_name = attr_name
-        self._cache: WeakValueDictionary[tuple, Any] = WeakValueDictionary()
+        self._cache: OrderedDict[tuple, Any] = OrderedDict()
         self._lock = threading.Lock()
         self._max_size = max_size
-        self._access_count: Dict[tuple, int] = {}
 
     def __call__(self, ctor_args: List[Any], ctor_kwargs: Dict[str, Any]) -> Callable[..., Any]:
         key = (tuple(ctor_args), tuple(sorted(ctor_kwargs.items())))
 
-        instance = self._cache.get(key)
-        if instance is None:
-            with self._lock:
-                instance = self._cache.get(key)
-                if instance is None:
-                    if len(self._access_count) >= self._max_size:
-                        self._evict_least_used()
-                    instance = self._cls(*ctor_args, **ctor_kwargs)
-                    self._cache[key] = instance
-                    self._access_count[key] = 0
+        with self._lock:
+            instance = self._cache.get(key)
+            if instance is not None:
+                # Mark as recently used
+                self._cache.move_to_end(key)
+            else:
+                # Evict least recently used if cache is full
+                if len(self._cache) >= self._max_size:
+                    self._cache.popitem(last=False)
+                # Create and cache new instance
+                instance = self._cls(*ctor_args, **ctor_kwargs)
+                self._cache[key] = instance
 
-        self._access_count[key] = self._access_count.get(key, 0) + 1
         return getattr(instance, self._attr_name)
-
-    def _evict_least_used(self) -> None:
-        if not self._access_count:
-            return
-        to_remove = max(1, len(self._access_count) // 4)
-        for key, _ in sorted(self._access_count.items(), key=lambda kv: kv[1])[:to_remove]:
-            self._access_count.pop(key, None)
-            self._cache.pop(key, None)
 
 
 class _StaticLikeFactory:
@@ -140,6 +134,7 @@ class RegisteredFunction:
         target = self.factory(ctor_args, ctor_kwargs)
         result = target(*args, **kwargs)
         if asyncio.iscoroutine(result):
+            # The ThreadPoolExecutor model runs async functions in a managed event loop
             return asyncio.run(result)
         return result
 
@@ -297,12 +292,13 @@ class ServiceServer:
                 if self._server_socket is None:
                     break
                 self._server_socket.settimeout(0.1)
-                client_socket, address = self._server_socket.accept()
+                client_socket, _ = self._server_socket.accept()
 
                 # Handle in thread pool for concurrency
                 if self._executor:
                     self._executor.submit(self._handle_client, client_socket)
                 else:
+                    # Fallback for immediate execution if executor is gone
                     self._handle_client(client_socket)
 
             except socket.timeout:
@@ -315,7 +311,7 @@ class ServiceServer:
         try:
             client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-            while True:
+            while self._running.is_set():
                 # Read message length (4 bytes)
                 length_bytes = client_socket.recv(4)
                 if not length_bytes:
@@ -335,11 +331,11 @@ class ServiceServer:
                     break
 
                 # Process request
-                request = pickle.loads(data)
+                request = msgpack.unpackb(data, raw=False)
                 response = self.handle_request(request)
 
                 # Send response
-                response_data = pickle.dumps(response, protocol=pickle.HIGHEST_PROTOCOL)
+                response_data = msgpack.packb(response, use_bin_type=True)
                 client_socket.sendall(struct.pack("!I", len(response_data)) + response_data)
 
         except Exception:

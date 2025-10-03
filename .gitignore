@@ -2,3 +2,6 @@
 __pycache__
 shell.nix
 metabridge_ipc.egg-info
+.mypy_cache
+.pytest_cache
+.ruff_cache

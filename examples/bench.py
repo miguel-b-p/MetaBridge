@@ -7,6 +7,7 @@ import time
 
 import metabridge as meta
 
+import service_daemon
 
 def bench_latency(n=200):
     c = meta.connect("demo-service", argumento="ping", timeout=3.0)

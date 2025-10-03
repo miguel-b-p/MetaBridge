@@ -2,11 +2,13 @@
 """High-performance client for MetaBridge services using sockets."""
 from __future__ import annotations
 
-import pickle
 import socket
 import struct
 from contextlib import contextmanager
+from queue import Full, Queue
 from typing import Any, Callable, Dict, Generator, List
+
+import msgpack
 
 from .exceptions import RemoteExecutionError, ServiceNotFound
 from .registry import resolve_service
@@ -21,6 +23,7 @@ class ServiceClient:
         *ctor_args: Any,
         timeout: float = 5.0,
         poll_interval: float = 0.002,
+        max_pool_size: int = 16,
         **ctor_kwargs: Any,
     ) -> None:
         self._name = name
@@ -28,24 +31,27 @@ class ServiceClient:
         self._poll_interval = poll_interval
         self._ctor_args = list(ctor_args)
         self._ctor_kwargs = dict(ctor_kwargs)
-        self._socket_pool: List[socket.socket] = []
         self._closed = False
+        self._max_pool_size = max_pool_size
 
         # Get service connection info
         service_info = resolve_service(name)
         self._host = service_info.host
         self._port = service_info.port
 
-        # Connection pooling for better performance
-        self._max_pool_size = 10
+        # Connection pooling for better performance and thread-safety
+        self._socket_pool: Queue[socket.socket] = Queue(maxsize=self._max_pool_size)
 
         # Cache endpoints
         self._endpoints: List[str] = self._fetch_endpoints()
 
     def _get_socket(self) -> socket.socket:
         """Get a socket from the pool or create a new one."""
-        if self._socket_pool:
-            return self._socket_pool.pop()
+        if not self._socket_pool.empty():
+            try:
+                return self._socket_pool.get_nowait()
+            except Exception:
+                pass  # Fallback to creating a new socket
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # Disable Nagle's algorithm
@@ -55,18 +61,21 @@ class ServiceClient:
         return sock
 
     def _return_socket(self, sock: socket.socket) -> None:
-        """Return a socket to the pool."""
-        if self._closed or len(self._socket_pool) >= self._max_pool_size:
+        """Return a socket to the pool if it's not full."""
+        if self._closed:
             sock.close()
-        else:
-            self._socket_pool.append(sock)
+            return
+        try:
+            self._socket_pool.put_nowait(sock)
+        except Full:
+            sock.close()
 
     @contextmanager
     def _managed_socket(self) -> Generator[socket.socket, None, None]:
         """Provides a socket from the pool and ensures it's returned or closed."""
         if self._closed:
             raise RuntimeError("ServiceClient is closed.")
-        
+
         sock = self._get_socket()
         try:
             yield sock
@@ -81,8 +90,8 @@ class ServiceClient:
         """Send request and receive response using a managed socket."""
         try:
             with self._managed_socket() as sock:
-                # Serialize with pickle (much faster than JSON)
-                data = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+                # Serialize with msgpack (faster and safer than pickle)
+                data = msgpack.packb(payload, use_bin_type=True)
 
                 # Send length header (4 bytes) + data
                 sock.sendall(struct.pack("!I", len(data)) + data)
@@ -102,7 +111,7 @@ class ServiceClient:
                         raise RemoteExecutionError("Connection closed while reading response")
                     response_data += chunk
 
-                return pickle.loads(response_data)
+                return msgpack.unpackb(response_data, raw=False)
 
         except Exception as exc:
             if isinstance(exc, RemoteExecutionError):
@@ -148,12 +157,12 @@ class ServiceClient:
         if self._closed:
             return
         self._closed = True
-        for sock in self._socket_pool:
+        while not self._socket_pool.empty():
             try:
+                sock = self._socket_pool.get_nowait()
                 sock.close()
             except Exception:
                 pass
-        self._socket_pool.clear()
 
     def __enter__(self) -> "ServiceClient":
         return self

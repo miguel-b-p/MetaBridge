@@ -17,7 +17,7 @@ O MetaBridge é uma solução elegante e eficiente para comunicação entre proc
 - [Instalação](#instalação)
 - [Guia de Uso](#guia-de-uso)
   - [1. Definindo um Serviço](#1-definindo-um-serviço)
-  - [2. Consumindo o Serviço](#2-consumindo-o-serviço)
+  - [2. Usando o Serviço](#2-usando-o-serviço)
 - [API Principal](#api-principal)
 - [Contribuindo](#contribuindo)
 - [Licença](#licença)
@@ -125,7 +125,7 @@ if __name__ == "__main__":
         print("Serviço finalizado com sucesso.")
 ```
 
-### 2. Consumindo o Serviço
+### 2. Usando o Serviço
 
 Em sua aplicação principal ou outro processo, conecte-se e utilize o serviço de forma transparente.
 

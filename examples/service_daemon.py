@@ -1,9 +1,10 @@
 """Example showing how to run a MetaBridge service in daemon mode."""
 from __future__ import annotations
 
-
 import asyncio
+
 import metabridge as meta
+
 
 @meta.create("demo-service").daemon()
 class Service:

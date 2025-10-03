@@ -11,11 +11,12 @@ import struct
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from multiprocessing.context import BaseContext
 from types import MappingProxyType
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .exceptions import MetaBridgeError, ServiceNotFound
-from .registry import ServiceRecord, register_service, unregister_service, find_free_port, resolve_service
+from .registry import ServiceRecord, find_free_port, register_service, resolve_service, unregister_service
 
 JsonDict = Dict[str, Any]
 EndpointSpec = Tuple[str, Callable[..., Any]]
@@ -24,16 +25,18 @@ CallableFactory = Callable[[List[Any], Dict[str, Any]], Callable[..., Any]]
 _ACTIVE_DAEMONS: List["DaemonHandle"] = []
 _DAEMON_CLEANUP_REGISTERED = False
 
+
 def _compute_worker_count() -> int:
-    workers_env = os.environ.get("SYNAPSE_WORKERS")
+    workers_env = os.environ.get("META_WORKERS")
     try:
         workers = int(workers_env) if workers_env else 0
-    except:
+    except (ValueError, TypeError):
         workers = 0
     if workers <= 0:
         cpu = os.cpu_count() or 1
         workers = min(32, max(4, cpu * 2))
     return workers
+
 
 def _register_daemon_handle(handle: "DaemonHandle") -> None:
     global _DAEMON_CLEANUP_REGISTERED
@@ -42,18 +45,21 @@ def _register_daemon_handle(handle: "DaemonHandle") -> None:
         atexit.register(_shutdown_daemons)
         _DAEMON_CLEANUP_REGISTERED = True
 
+
 def _unregister_daemon_handle(handle: "DaemonHandle") -> None:
     try:
         _ACTIVE_DAEMONS.remove(handle)
     except ValueError:
         pass
 
+
 def _shutdown_daemons() -> None:
     for handle in list(_ACTIVE_DAEMONS):
         try:
             handle.stop(timeout=0.5)
-        except:
+        except Exception:
             pass
+
 
 class _FunctionFactory:
     def __init__(self, func: Callable[..., Any]) -> None:
@@ -62,9 +68,11 @@ class _FunctionFactory:
     def __call__(self, _ctor_args: List[Any], _ctor_kwargs: Dict[str, Any]) -> Callable[..., Any]:
         return self._func
 
+
 class _InstanceMethodFactory:
     def __init__(self, cls: type, attr_name: str, max_size: int = 128) -> None:
         from weakref import WeakValueDictionary
+
         self._cls = cls
         self._attr_name = attr_name
         self._cache: WeakValueDictionary[tuple, Any] = WeakValueDictionary()
@@ -97,6 +105,7 @@ class _InstanceMethodFactory:
             self._access_count.pop(key, None)
             self._cache.pop(key, None)
 
+
 class _StaticLikeFactory:
     def __init__(self, owner: type, attr_name: str) -> None:
         self._owner = owner
@@ -104,6 +113,7 @@ class _StaticLikeFactory:
 
     def __call__(self, _ctor_args: List[Any], _ctor_kwargs: Dict[str, Any]) -> Callable[..., Any]:
         return getattr(self._owner, self._attr_name)
+
 
 class RegisteredFunction:
     """Internal wrapper that knows how to produce a callable target."""
@@ -130,6 +140,7 @@ class RegisteredFunction:
         if asyncio.iscoroutine(result):
             return asyncio.run(result)
         return result
+
 
 class ServiceServer:
     """High-performance server using TCP sockets for ultra-low latency."""
@@ -223,7 +234,7 @@ class ServiceServer:
         if self._server_socket:
             try:
                 self._server_socket.close()
-            except:
+            except Exception:
                 pass
             self._server_socket = None
 
@@ -251,12 +262,7 @@ class ServiceServer:
         if self._record is not None:
             return self._record
 
-        record = ServiceRecord(
-            name=self._name,
-            host=self._host,
-            port=self._port,
-            pid=os.getpid()
-        )
+        record = ServiceRecord(name=self._name, host=self._host, port=self._port, pid=os.getpid())
         register_service(record)
         atexit.register(lambda: unregister_service(record.name, expected_pid=record.pid))
         self._record = record
@@ -286,7 +292,8 @@ class ServiceServer:
         while self._running.is_set():
             try:
                 # Accept with timeout to check running flag periodically
-                if self._server_socket is None: break
+                if self._server_socket is None:
+                    break
                 self._server_socket.settimeout(0.1)
                 client_socket, address = self._server_socket.accept()
 
@@ -295,7 +302,7 @@ class ServiceServer:
                     self._executor.submit(self._handle_client, client_socket)
                 else:
                     self._handle_client(client_socket)
-                    
+
             except socket.timeout:
                 continue
             except OSError:
@@ -311,29 +318,29 @@ class ServiceServer:
                 length_bytes = client_socket.recv(4)
                 if not length_bytes:
                     break
-                
-                message_length = struct.unpack('!I', length_bytes)[0]
-                
+
+                message_length = struct.unpack("!I", length_bytes)[0]
+
                 # Read message data
-                data = b''
+                data = b""
                 while len(data) < message_length:
                     chunk = client_socket.recv(min(4096, message_length - len(data)))
                     if not chunk:
                         break
                     data += chunk
-                
+
                 if len(data) < message_length:
                     break
-                
+
                 # Process request
                 request = pickle.loads(data)
                 response = self.handle_request(request)
-                
+
                 # Send response
                 response_data = pickle.dumps(response, protocol=pickle.HIGHEST_PROTOCOL)
-                client_socket.sendall(struct.pack('!I', len(response_data)) + response_data)
-                
-        except:
+                client_socket.sendall(struct.pack("!I", len(response_data)) + response_data)
+
+        except Exception:
             pass
         finally:
             client_socket.close()
@@ -376,6 +383,7 @@ class ServiceServer:
                 "error": {"type": exc.__class__.__name__, "message": str(exc)},
             }
 
+
 class ServiceBuilder:
     """Public API exposed to user-land to register functions."""
 
@@ -398,6 +406,7 @@ class ServiceBuilder:
             if alias and alias != endpoint_name:
                 self._server.register(alias, func, factory=factory)
             return func
+
         return decorator
 
     def _register_endpoint(
@@ -415,6 +424,7 @@ class ServiceBuilder:
     def daemon(self) -> "DaemonServiceBuilder":
         self._server.stop()
         return DaemonServiceBuilder(self._server, bootstrap=False)
+
 
 class DaemonHandle:
     """Represents a background MetaBridge daemon process."""
@@ -460,6 +470,7 @@ class DaemonHandle:
 
     def join(self, timeout: Optional[float] = None) -> None:
         self._process.join(timeout)
+
 
 class DaemonServiceBuilder(ServiceBuilder):
     """Builder variant that exposes convenience helpers for daemon services."""
@@ -511,15 +522,17 @@ class DaemonServiceBuilder(ServiceBuilder):
 
         return handle
 
+
 def create_service(name: str) -> ServiceBuilder:
     server = ServiceServer(name=name)
     return ServiceBuilder(server)
+
 
 def _spawn_daemon_process(
     name: str, endpoints: List[EndpointSpec], poll_interval: float
 ) -> multiprocessing.Process:
     try:
-        ctx = multiprocessing.get_context("fork")
+        ctx: BaseContext = multiprocessing.get_context("fork")
     except ValueError:
         ctx = multiprocessing.get_context("spawn")
 
@@ -532,11 +545,13 @@ def _spawn_daemon_process(
     process.start()
     return process
 
+
 def _daemon_worker(name: str, endpoints: List[EndpointSpec], poll_interval: float) -> None:
     server = ServiceServer(name)
     for endpoint_name, func in endpoints:
         server.register(endpoint_name, func)
     server.run_forever(poll_interval=poll_interval)
+
 
 def _await_service_start(name: str, *, timeout: float) -> None:
     deadline = time.perf_counter() + timeout

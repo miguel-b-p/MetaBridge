@@ -6,10 +6,10 @@ setup(
     description="High-performance in-memory service pipes for intra-project function calls.",
     author="miguel-b-p",
     author_email="miguelpinotty@gmail.com",
-    
+
     packages=['metabridge'],
     package_dir={'metabridge': 'src'},
-    
+
     classifiers=[
         "Programming Language :: Python :: 3",
         "Operating System :: OS Independent",

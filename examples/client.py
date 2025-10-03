@@ -1,10 +1,11 @@
 """Client example consuming a MetaBridge daemon service."""
 from __future__ import annotations
 
+import metabridge as meta
+
+import service_daemon
 
 # Importa o serviço para garantir que ele está rodando em background.
-import service_daemon
-import metabridge as meta
 
 if __name__ == "__main__":
     client = meta.connect("demo-service", argumento='Olá')

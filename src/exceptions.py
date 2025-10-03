@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 class MetaBridgeError(Exception):
     """Base exception for MetaBridge-related errors."""
 

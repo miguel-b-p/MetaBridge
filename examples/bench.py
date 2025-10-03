@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-
 import os
-import time
-import threading
 import statistics as stats
+import threading
+import time
 
 import metabridge as meta
-import service_daemon
+
 
 def bench_latency(n=200):
     c = meta.connect("demo-service", argumento="ping", timeout=3.0)
@@ -15,13 +14,13 @@ def bench_latency(n=200):
     # warmup
     for _ in range(20):
         c.get("warmup")
-    
+
     times = []
     for _ in range(n):
         t0 = time.perf_counter()
         c.get("warmup")
         times.append((time.perf_counter() - t0) * 1e3)
-    
+
     return {
         "n": n,
         "p50_ms": stats.median(times),
@@ -46,12 +45,12 @@ def bench_throughput(concurrency=16, duration=2.0):
         t.start()
     for t in threads:
         t.join()
-    
+
     total = sum(counts)
     return {"concurrency": concurrency, "duration_s": duration, "ops": total, "ops_per_sec": total / duration}
 
 if __name__ == "__main__":
-    os.environ.setdefault("SYNAPSE_WORKERS", "16")
+    os.environ.setdefault("META_WORKERS", "16")
     lat = bench_latency()
     thr = bench_throughput()
     print("Latency (ms):", lat)

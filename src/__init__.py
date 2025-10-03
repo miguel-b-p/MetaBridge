@@ -1,7 +1,6 @@
 """MetaBridge - High-performance in-memory service pipes for intra-project function calls."""
 from __future__ import annotations
 
-
 import inspect
 from typing import Any, Callable, Dict, Optional
 
@@ -87,13 +86,13 @@ class _ServiceRegistration:
             func, descriptor = _extract_callable(member)
             if func is None or not hasattr(func, "metabridge_endpoint"):
                 continue
-            
+
             endpoint_name = getattr(func, "metabridge_endpoint", func.__name__)
             _annotate_endpoint(func, cls, attr_name, descriptor)
-            
+
             names_to_register = {endpoint_name or attr_name}
             names_to_register.add(attr_name)
-            
+
             for endpoint in names_to_register:
                 if endpoint in self._seen_endpoints:
                     continue

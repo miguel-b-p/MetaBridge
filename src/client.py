@@ -4,11 +4,11 @@ from __future__ import annotations
 import pickle
 import socket
 import struct
-import time
 from typing import Any, Callable, Dict, List
 
 from .exceptions import RemoteExecutionError, ServiceNotFound
 from .registry import resolve_service
+
 
 class ServiceClient:
     """High-performance client using TCP sockets for low-latency communication."""
@@ -26,6 +26,7 @@ class ServiceClient:
         self._poll_interval = poll_interval
         self._ctor_args = list(ctor_args)
         self._ctor_kwargs = dict(ctor_kwargs)
+        self._socket_pool: List[socket.socket] = []
 
         # Get service connection info
         service_info = resolve_service(name)
@@ -33,7 +34,6 @@ class ServiceClient:
         self._port = service_info.port
 
         # Connection pooling for better performance
-        self._socket_pool: List[socket.socket] = []
         self._max_pool_size = 10
 
         # Cache endpoints
@@ -66,31 +66,31 @@ class ServiceClient:
 
             # Serialize with pickle (much faster than JSON)
             data = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
-            
+
             # Send length header (4 bytes) + data
-            sock.sendall(struct.pack('!I', len(data)) + data)
-            
+            sock.sendall(struct.pack("!I", len(data)) + data)
+
             # Receive response length
             length_bytes = sock.recv(4)
             if not length_bytes:
                 raise RemoteExecutionError("Connection closed by server")
-            
-            response_length = struct.unpack('!I', length_bytes)[0]
-            
+
+            response_length = struct.unpack("!I", length_bytes)[0]
+
             # Receive response data
-            response_data = b''
+            response_data = b""
             while len(response_data) < response_length:
                 chunk = sock.recv(min(4096, response_length - len(response_data)))
                 if not chunk:
                     raise RemoteExecutionError("Connection closed while reading response")
                 response_data += chunk
-            
+
             response = pickle.loads(response_data)
-            
+
             # Return socket to pool for reuse
             self._return_socket(sock)
             return response
-            
+
         except Exception as exc:
             if sock:
                 sock.close()
@@ -116,10 +116,10 @@ class ServiceClient:
             }
 
             response = self._send_request(payload)
-            
+
             if response.get("status") == "ok":
                 return response.get("result")
-            
+
             error = response.get("error", {})
             raise RemoteExecutionError(
                 f"Remote call to '{self._name}.{name}' failed:\n"
@@ -134,11 +134,14 @@ class ServiceClient:
 
     def __del__(self):
         """Close all pooled sockets on cleanup."""
+        if not hasattr(self, "_socket_pool"):
+            return
         for sock in self._socket_pool:
             try:
                 sock.close()
-            except:
+            except Exception:
                 pass
+
 
 def connect_service(
     name: str,
@@ -156,4 +159,4 @@ def connect_service(
             **ctor_kwargs,
         )
     except ServiceNotFound as exc:
-        raise ServiceNotFound(f"Unable to connect to service '{name}': {exc}")
+        raise ServiceNotFound(f"Unable to connect to service '{name}': {exc}") from exc

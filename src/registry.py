@@ -1,17 +1,20 @@
 """In-memory service registry using multiprocessing.Manager for IPC."""
 from __future__ import annotations
 
-import os
 import multiprocessing
+import os
 from dataclasses import dataclass
+from multiprocessing.managers import DictProxy
+from multiprocessing.synchronize import Lock
 from typing import Any, Dict, Optional
 
 from .exceptions import ServiceAlreadyExists, ServiceNotFound
 
 # Global manager for sharing service registry across processes
 _manager: Optional[multiprocessing.managers.SyncManager] = None
-_registry: Optional[Dict[str, Dict[str, Any]]] = None
-_lock: Optional[multiprocessing.synchronize.Lock] = None
+_registry: Optional[DictProxy[str, dict[str, Any]]] = None
+_lock: Optional[Lock] = None
+
 
 def _get_manager() -> multiprocessing.managers.SyncManager:
     """Get or create the global manager."""
@@ -22,19 +25,23 @@ def _get_manager() -> multiprocessing.managers.SyncManager:
         _lock = _manager.Lock()
     return _manager
 
-def _get_registry() -> Dict[str, Dict[str, Any]]:
+
+def _get_registry() -> DictProxy[str, dict[str, Any]]:
     """Get the shared registry dict."""
     _get_manager()
-    return _registry  # type: ignore
+    return _registry  # type: ignore[return-value]
 
-def _get_lock() -> multiprocessing.synchronize.Lock:
+
+def _get_lock() -> Lock:
     """Get the shared lock."""
     _get_manager()
-    return _lock  # type: ignore
+    return _lock  # type: ignore[return-value]
+
 
 @dataclass
 class ServiceRecord:
     """Metadata stored for each registered service."""
+
     name: str
     host: str
     port: int
@@ -42,20 +49,11 @@ class ServiceRecord:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ServiceRecord":
-        return cls(
-            name=data["name"],
-            host=data["host"],
-            port=data["port"],
-            pid=int(data["pid"])
-        )
+        return cls(name=data["name"], host=data["host"], port=data["port"], pid=int(data["pid"]))
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "name": self.name,
-            "host": self.host,
-            "port": self.port,
-            "pid": self.pid
-        }
+        return {"name": self.name, "host": self.host, "port": self.port, "pid": self.pid}
+
 
 def _is_process_alive(pid: int) -> bool:
     """Check if a process is still running."""
@@ -71,6 +69,7 @@ def _is_process_alive(pid: int) -> bool:
         return False
     return True
 
+
 def register_service(record: ServiceRecord) -> None:
     """Register a service in the shared registry."""
     registry = _get_registry()
@@ -82,11 +81,10 @@ def register_service(record: ServiceRecord) -> None:
             existing_pid = existing_data.get("pid", -1)
 
             if existing_pid != record.pid and _is_process_alive(existing_pid):
-                raise ServiceAlreadyExists(
-                    f"Service '{record.name}' is already registered by pid {existing_pid}."
-                )
+                raise ServiceAlreadyExists(f"Service '{record.name}' is already registered by pid {existing_pid}.")
 
         registry[record.name] = record.to_dict()
+
 
 def unregister_service(name: str, *, expected_pid: Optional[int] = None) -> None:
     """Remove a service from the registry."""
@@ -104,6 +102,7 @@ def unregister_service(name: str, *, expected_pid: Optional[int] = None) -> None
 
         del registry[name]
 
+
 def resolve_service(name: str) -> ServiceRecord:
     """Find a service in the registry."""
     registry = _get_registry()
@@ -118,17 +117,17 @@ def resolve_service(name: str) -> ServiceRecord:
 
         if not _is_process_alive(record.pid):
             del registry[name]
-            raise ServiceNotFound(
-                f"Service '{name}' appears to be stale (process {record.pid} is not running)."
-            )
+            raise ServiceNotFound(f"Service '{name}' appears to be stale (process {record.pid} is not running).")
 
         return record
+
 
 def find_free_port() -> int:
     """Find an available TCP port."""
     import socket
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
+        s.bind(("127.0.0.1", 0))
         s.listen(1)
         port = s.getsockname()[1]
         return port

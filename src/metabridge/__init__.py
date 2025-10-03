@@ -1,9 +1,9 @@
-# src/__init__.py
+# src/metabridge/__init__.py
 """MetaBridge - High-performance in-memory service pipes for intra-project function calls."""
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, overload
 
 from .client import ServiceClient, connect_service
 from .exceptions import (
@@ -26,37 +26,59 @@ __all__ = [
     "run",
     "connect",
     "endpoint",
+    "function", # Adicionado para clareza
 ]
 
-def _mark_endpoint(func: Callable[..., Any], alias: Optional[str] = None) -> Callable[..., Any]:
-    setattr(func, "metabridge_endpoint", alias or func.__name__)
+
+def _mark_endpoint(func: Callable[..., Any], alias: Optional[str]) -> Callable[..., Any]:
+    """Internal helper to attach metadata to a function."""
+    # Se alias for None, o nome do endpoint será o nome da função.
+    # Se for uma string, será o alias.
+    setattr(func, "metabridge_endpoint", alias)
     return func
 
-def endpoint(name: Optional[str] = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Mark a method as remotely accessible under the given endpoint name."""
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        return _mark_endpoint(func, name)
-    return decorator
+# Sobrecargas para melhor suporte a tipos e autocompletar no editor.
+@overload
+def endpoint(func: Callable[..., Any]) -> Callable[..., Any]: ...
+@overload
+def endpoint(*, name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
+
+def endpoint(
+    func: Optional[Callable[..., Any]] = None, *, name: Optional[str] = None
+) -> Callable[[Callable[..., Any]], Callable[..., Any]] | Callable[..., Any]:
+    """
+    Marks a method as a remotely accessible endpoint.
+
+    Can be used as `@meta.endpoint` or `@meta.endpoint(name="custom_name")`.
+    """
+
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        return _mark_endpoint(fn, name or fn.__name__)
+
+    return decorator(func) if func else decorator
+
+
+def function(func: Callable[..., Any]) -> Callable[..., Any]:
+    """
+    Decorator to expose a function as an endpoint using its own name.
+    Shorthand for `@meta.endpoint`.
+    """
+    return _mark_endpoint(func, func.__name__)
+
 
 def __getattr__(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
-    Provides dynamic decorators for endpoints (e.g., @meta.teste, @meta.function).
-    This is part of the public API and is triggered for any attribute not
-    explicitly defined in this module.
+    Provides dynamic decorators for endpoints (e.g., @meta.get, @meta.test).
+    The attribute name becomes the endpoint name.
     """
-    if name.startswith("_"):
+    if name.startswith("_") or name in __all__:
         raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
-    # For @meta.function, the endpoint name is derived from the function name.
-    if name == "function":
-        def function_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            return _mark_endpoint(func, None)
-        return function_decorator
-
-    # For any other name (e.g., @meta.teste), the attribute name becomes the endpoint name.
-    def name_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         return _mark_endpoint(func, name)
-    return name_decorator
+
+    return decorator
+
 
 class _ServiceRegistration:
     """Holds metadata about a declared MetaBridge service."""
@@ -88,11 +110,12 @@ class _ServiceRegistration:
             if func is None or not hasattr(func, "metabridge_endpoint"):
                 continue
 
-            endpoint_name = getattr(func, "metabridge_endpoint", func.__name__)
+            endpoint_name = getattr(func, "metabridge_endpoint")
             _annotate_endpoint(func, cls, attr_name, descriptor)
 
-            names_to_register = {endpoint_name or attr_name}
-            names_to_register.add(attr_name)
+            # O nome do endpoint é o alias ou o nome da função.
+            # Também registramos o nome do atributo como um alias implícito.
+            names_to_register = {endpoint_name, attr_name}
 
             for endpoint in names_to_register:
                 if endpoint in self._seen_endpoints:
@@ -111,12 +134,14 @@ class _ServiceRegistration:
         builder = self._ensure_daemon_builder()
         return builder.run(wait=wait, poll_interval=poll_interval, startup_timeout=startup_timeout)
 
+
 class _ServiceClassDecorator:
     def __init__(self, registration: _ServiceRegistration) -> None:
         self._registration = registration
 
     def __call__(self, cls: type) -> type:
         return self._registration._register_class(cls)
+
 
 def _extract_callable(member: Any) -> tuple[Optional[Callable[..., Any]], str]:
     if isinstance(member, staticmethod):
@@ -127,13 +152,16 @@ def _extract_callable(member: Any) -> tuple[Optional[Callable[..., Any]], str]:
         return member, "instance"
     return None, ""
 
+
 def _annotate_endpoint(func: Callable[..., Any], owner: type, attr_name: str, descriptor: str) -> None:
     setattr(func, "metabridge_owner", owner)
     setattr(func, "metabridge_attr", attr_name)
     setattr(func, "metabridge_descriptor", descriptor)
 
+
 _SERVICE_REGISTRY: Dict[str, _ServiceRegistration] = {}
 _LAST_REGISTRATION: Optional[_ServiceRegistration] = None
+
 
 def create(name: str, host: Optional[str] = None) -> _ServiceRegistration:
     """Create (or retrieve) a MetaBridge service registration for the given name."""
@@ -145,6 +173,7 @@ def create(name: str, host: Optional[str] = None) -> _ServiceRegistration:
     _LAST_REGISTRATION = registration
     return registration
 
+
 def _resolve_registration(name: Optional[str]) -> _ServiceRegistration:
     if name is not None:
         try:
@@ -154,6 +183,7 @@ def _resolve_registration(name: Optional[str]) -> _ServiceRegistration:
     if _LAST_REGISTRATION is None:
         raise MetaBridgeError("No MetaBridge service has been registered yet.")
     return _LAST_REGISTRATION
+
 
 def run(
     name: Optional[str] = None,
@@ -165,6 +195,7 @@ def run(
     """Launch the given service in daemon mode."""
     registration = _resolve_registration(name)
     return registration.run(wait=wait, poll_interval=poll_interval, startup_timeout=startup_timeout)
+
 
 def connect(
     name: str,

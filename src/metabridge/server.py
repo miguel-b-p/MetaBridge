@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import functools
 import multiprocessing
 import os
 import socket
@@ -20,7 +21,13 @@ import msgpack
 
 from .config import DEFAULT_HOST
 from .exceptions import MetaBridgeError, ServiceNotFound
-from .registry import ServiceRecord, find_free_port, register_service, resolve_service, unregister_service
+from .registry import (
+    ServiceRecord,
+    find_free_port,
+    register_service,
+    resolve_service,
+    unregister_service,
+)
 
 JsonDict = Dict[str, Any]
 EndpointSpec = Tuple[str, Callable[..., Any]]
@@ -69,36 +76,55 @@ class _FunctionFactory:
     def __init__(self, func: Callable[..., Any]) -> None:
         self._func = func
 
-    def __call__(self, _ctor_args: List[Any], _ctor_kwargs: Dict[str, Any]) -> Callable[..., Any]:
+    def __call__(
+        self, _ctor_args: List[Any], _ctor_kwargs: Dict[str, Any]
+    ) -> Callable[..., Any]:
         return self._func
 
 
 class _InstanceMethodFactory:
-    """Efficient LRU cache for service class instances."""
+    """
+    Efficient, sharded LRU cache for service class instances to prevent lock contention.
+    """
+
+    # Número de caches particionados. Potência de 2 para usar bitwise-AND.
+    NUM_SHARDS = 16
 
     def __init__(self, cls: type, attr_name: str, max_size: int = 128) -> None:
         self._cls = cls
         self._attr_name = attr_name
-        self._cache: OrderedDict[tuple, Any] = OrderedDict()
-        self._lock = threading.Lock()
-        self._max_size = max_size
+        self._cache_shards: List[Callable[[Tuple], Any]] = []
 
-    def __call__(self, ctor_args: List[Any], ctor_kwargs: Dict[str, Any]) -> Callable[..., Any]:
-        key = (tuple(ctor_args), tuple(sorted(ctor_kwargs.items())))
+        # Distribui o tamanho máximo do cache entre os shards.
+        shard_size = max(1, max_size // self.NUM_SHARDS)
 
-        with self._lock:
-            instance = self._cache.get(key)
-            if instance is not None:
-                # Mark as recently used
-                self._cache.move_to_end(key)
-            else:
-                # Evict least recently used if cache is full
-                if len(self._cache) >= self._max_size:
-                    self._cache.popitem(last=False)
-                # Create and cache new instance
-                instance = self._cls(*ctor_args, **ctor_kwargs)
-                self._cache[key] = instance
+        for _ in range(self.NUM_SHARDS):
+            # Cada shard é um LRU cache independente, com seu próprio lock.
+            @functools.lru_cache(maxsize=shard_size)
+            def _create_instance_from_key(key: Tuple) -> Any:
+                """Cria uma instância a partir de uma chave combinada (args, kwargs)."""
+                ctor_args_tuple, kwargs_tuple = key
+                return self._cls(*ctor_args_tuple, **dict(kwargs_tuple))
 
+            self._cache_shards.append(_create_instance_from_key)
+
+    def __call__(
+        self, ctor_args: List[Any], ctor_kwargs: Dict[str, Any]
+    ) -> Callable[..., Any]:
+        # Cria uma chave única e "hasheável" para os argumentos do construtor.
+        ctor_args_tuple = tuple(ctor_args)
+        kwargs_tuple = tuple(sorted(ctor_kwargs.items()))
+        key = (ctor_args_tuple, kwargs_tuple)
+
+        # Seleciona um shard de forma rápida e determinística usando o hash da chave.
+        # A operação `& (NUM_SHARDS - 1)` é um truque rápido para `hash % NUM_SHARDS`.
+        shard_index = hash(key) & (self.NUM_SHARDS - 1)
+        create_func = self._cache_shards[shard_index]
+
+        # Obtém (ou cria) a instância a partir do shard de cache selecionado.
+        instance = create_func(key)
+
+        # Retorna o método solicitado da instância.
         return getattr(instance, self._attr_name)
 
 
@@ -107,7 +133,9 @@ class _StaticLikeFactory:
         self._owner = owner
         self._attr_name = attr_name
 
-    def __call__(self, _ctor_args: List[Any], _ctor_kwargs: Dict[str, Any]) -> Callable[..., Any]:
+    def __call__(
+        self, _ctor_args: List[Any], _ctor_kwargs: Dict[str, Any]
+    ) -> Callable[..., Any]:
         return getattr(self._owner, self._attr_name)
 
 
@@ -175,9 +203,13 @@ class ServiceServer:
     @property
     def endpoints(self) -> MappingProxyType:
         with self._lock:
-            return MappingProxyType({name: entry.func for name, entry in self._registry.items()})
+            return MappingProxyType(
+                {name: entry.func for name, entry in self._registry.items()}
+            )
 
-    def _resolve_factory(self, func: Callable[..., Any], name: str) -> CallableFactory:
+    def _resolve_factory(
+        self, func: Callable[..., Any], name: str
+    ) -> CallableFactory:
         owner = getattr(func, "metabridge_owner", None)
         attr_name = getattr(func, "metabridge_attr", name)
         descriptor = getattr(func, "metabridge_descriptor", "instance")
@@ -197,7 +229,9 @@ class ServiceServer:
     ) -> None:
         with self._lock:
             if self._frozen:
-                raise MetaBridgeError("Service is running as a daemon; no new endpoints can be registered")
+                raise MetaBridgeError(
+                    "Service is running as a daemon; no new endpoints can be registered"
+                )
             if name in self._registry:
                 raise MetaBridgeError(f"Endpoint '{name}' is already registered")
             resolved_factory = factory or self._resolve_factory(func, name)
@@ -259,9 +293,13 @@ class ServiceServer:
         if self._record is not None:
             return self._record
 
-        record = ServiceRecord(name=self._name, host=self._host, port=self._port, pid=os.getpid())
+        record = ServiceRecord(
+            name=self._name, host=self._host, port=self._port, pid=os.getpid()
+        )
         register_service(record)
-        atexit.register(lambda: unregister_service(record.name, expected_pid=record.pid))
+        atexit.register(
+            lambda: unregister_service(record.name, expected_pid=record.pid)
+        )
         self._record = record
         return record
 
@@ -322,7 +360,9 @@ class ServiceServer:
                 # Read message data
                 data = b""
                 while len(data) < message_length:
-                    chunk = client_socket.recv(min(4096, message_length - len(data)))
+                    chunk = client_socket.recv(
+                        min(4096, message_length - len(data))
+                    )
                     if not chunk:
                         break
                     data += chunk
@@ -336,7 +376,9 @@ class ServiceServer:
 
                 # Send response
                 response_data = msgpack.packb(response, use_bin_type=True)
-                client_socket.sendall(struct.pack("!I", len(response_data)) + response_data)
+                client_socket.sendall(
+                    struct.pack("!I", len(response_data)) + response_data
+                )
 
         except Exception:
             pass
@@ -363,13 +405,17 @@ class ServiceServer:
         ctor_args = list(request.get("ctor_args", []))
         ctor_kwargs = dict(request.get("ctor_kwargs", {}))
 
-        with self._lock:
-            callable_entry = self._registry.get(endpoint)
+        # O lock foi removido aqui para performance. O registro é "somente leitura"
+        # após o início do servidor, e leituras de dict são atômicas (thread-safe).
+        callable_entry = self._registry.get(endpoint)
 
         if callable_entry is None:
             return {
                 "status": "error",
-                "error": {"type": "NotFound", "message": f"Endpoint '{endpoint}' not found"},
+                "error": {
+                    "type": "NotFound",
+                    "message": f"Endpoint '{endpoint}' not found",
+                },
             }
 
         try:
@@ -489,7 +535,9 @@ class DaemonServiceBuilder(ServiceBuilder):
 
         endpoints = self._server.snapshot_registry()
         if not endpoints:
-            raise MetaBridgeError("Cannot run daemon without at least one registered endpoint")
+            raise MetaBridgeError(
+                "Cannot run daemon without at least one registered endpoint"
+            )
 
         self._server.set_frozen(True)
         self._server.stop()
@@ -500,7 +548,9 @@ class DaemonServiceBuilder(ServiceBuilder):
             _unregister_daemon_handle(handle)
             self._server.set_frozen(False)
 
-        process = _spawn_daemon_process(self._server.name, endpoints, poll_interval)
+        process = _spawn_daemon_process(
+            self._server.name, endpoints, poll_interval
+        )
         handle = DaemonHandle(self._server.name, process, cleanup=_cleanup)
 
         try:
@@ -544,7 +594,9 @@ def _spawn_daemon_process(
     return process
 
 
-def _daemon_worker(name: str, endpoints: List[EndpointSpec], poll_interval: float) -> None:
+def _daemon_worker(
+    name: str, endpoints: List[EndpointSpec], poll_interval: float
+) -> None:
     server = ServiceServer(name)
     for endpoint_name, func in endpoints:
         server.register(endpoint_name, func)

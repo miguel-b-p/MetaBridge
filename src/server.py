@@ -1,3 +1,4 @@
+# src/server.py
 """High-performance server using sockets and memory-mapped communication."""
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from multiprocessing.context import BaseContext
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .config import DEFAULT_HOST
 from .exceptions import MetaBridgeError, ServiceNotFound
 from .registry import ServiceRecord, find_free_port, register_service, resolve_service, unregister_service
 
@@ -145,13 +147,13 @@ class RegisteredFunction:
 class ServiceServer:
     """High-performance server using TCP sockets for ultra-low latency."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, host: Optional[str] = None) -> None:
         self._name = name
         self._registry: Dict[str, RegisteredFunction] = {}
         self._lock = threading.Lock()
         self._server_socket: Optional[socket.socket] = None
-        self._host = "127.0.0.1"
-        self._port = find_free_port()
+        self._host = host or DEFAULT_HOST
+        self._port = find_free_port(self._host)
         self._running = threading.Event()
         self._record: Optional[ServiceRecord] = None
         self._frozen = False
@@ -523,8 +525,8 @@ class DaemonServiceBuilder(ServiceBuilder):
         return handle
 
 
-def create_service(name: str) -> ServiceBuilder:
-    server = ServiceServer(name=name)
+def create_service(name: str, host: Optional[str] = None) -> ServiceBuilder:
+    server = ServiceServer(name=name, host=host)
     return ServiceBuilder(server)
 
 

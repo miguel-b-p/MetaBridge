@@ -1,10 +1,12 @@
+# src/client.py
 """High-performance client for MetaBridge services using sockets."""
 from __future__ import annotations
 
 import pickle
 import socket
 import struct
-from typing import Any, Callable, Dict, List
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, Generator, List
 
 from .exceptions import RemoteExecutionError, ServiceNotFound
 from .registry import resolve_service
@@ -27,6 +29,7 @@ class ServiceClient:
         self._ctor_args = list(ctor_args)
         self._ctor_kwargs = dict(ctor_kwargs)
         self._socket_pool: List[socket.socket] = []
+        self._closed = False
 
         # Get service connection info
         service_info = resolve_service(name)
@@ -53,47 +56,55 @@ class ServiceClient:
 
     def _return_socket(self, sock: socket.socket) -> None:
         """Return a socket to the pool."""
-        if len(self._socket_pool) < self._max_pool_size:
-            self._socket_pool.append(sock)
-        else:
+        if self._closed or len(self._socket_pool) >= self._max_pool_size:
             sock.close()
+        else:
+            self._socket_pool.append(sock)
+
+    @contextmanager
+    def _managed_socket(self) -> Generator[socket.socket, None, None]:
+        """Provides a socket from the pool and ensures it's returned or closed."""
+        if self._closed:
+            raise RuntimeError("ServiceClient is closed.")
+        
+        sock = self._get_socket()
+        try:
+            yield sock
+            # If everything went well, return the socket to the pool
+            self._return_socket(sock)
+        except Exception:
+            # If an error occurred, close the socket to prevent a corrupted state
+            sock.close()
+            raise
 
     def _send_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Send request and receive response using binary protocol."""
-        sock = None
+        """Send request and receive response using a managed socket."""
         try:
-            sock = self._get_socket()
+            with self._managed_socket() as sock:
+                # Serialize with pickle (much faster than JSON)
+                data = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
 
-            # Serialize with pickle (much faster than JSON)
-            data = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+                # Send length header (4 bytes) + data
+                sock.sendall(struct.pack("!I", len(data)) + data)
 
-            # Send length header (4 bytes) + data
-            sock.sendall(struct.pack("!I", len(data)) + data)
+                # Receive response length
+                length_bytes = sock.recv(4)
+                if not length_bytes:
+                    raise RemoteExecutionError("Connection closed by server")
 
-            # Receive response length
-            length_bytes = sock.recv(4)
-            if not length_bytes:
-                raise RemoteExecutionError("Connection closed by server")
+                response_length = struct.unpack("!I", length_bytes)[0]
 
-            response_length = struct.unpack("!I", length_bytes)[0]
+                # Receive response data
+                response_data = b""
+                while len(response_data) < response_length:
+                    chunk = sock.recv(min(4096, response_length - len(response_data)))
+                    if not chunk:
+                        raise RemoteExecutionError("Connection closed while reading response")
+                    response_data += chunk
 
-            # Receive response data
-            response_data = b""
-            while len(response_data) < response_length:
-                chunk = sock.recv(min(4096, response_length - len(response_data)))
-                if not chunk:
-                    raise RemoteExecutionError("Connection closed while reading response")
-                response_data += chunk
-
-            response = pickle.loads(response_data)
-
-            # Return socket to pool for reuse
-            self._return_socket(sock)
-            return response
+                return pickle.loads(response_data)
 
         except Exception as exc:
-            if sock:
-                sock.close()
             if isinstance(exc, RemoteExecutionError):
                 raise
             raise RemoteExecutionError(f"Request failed: {exc}") from exc
@@ -132,15 +143,23 @@ class ServiceClient:
     def endpoints(self) -> List[str]:
         return list(self._endpoints)
 
-    def __del__(self):
-        """Close all pooled sockets on cleanup."""
-        if not hasattr(self, "_socket_pool"):
+    def close(self) -> None:
+        """Close the client and all pooled socket connections."""
+        if self._closed:
             return
+        self._closed = True
         for sock in self._socket_pool:
             try:
                 sock.close()
             except Exception:
                 pass
+        self._socket_pool.clear()
+
+    def __enter__(self) -> "ServiceClient":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
 
 
 def connect_service(

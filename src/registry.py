@@ -1,13 +1,16 @@
+# src/registry.py
 """In-memory service registry using multiprocessing.Manager for IPC."""
 from __future__ import annotations
 
 import multiprocessing
 import os
+import socket
 from dataclasses import dataclass
 from multiprocessing.managers import DictProxy
 from multiprocessing.synchronize import Lock
 from typing import Any, Dict, Optional
 
+from .config import DEFAULT_HOST
 from .exceptions import ServiceAlreadyExists, ServiceNotFound
 
 # Global manager for sharing service registry across processes
@@ -122,12 +125,10 @@ def resolve_service(name: str) -> ServiceRecord:
         return record
 
 
-def find_free_port() -> int:
-    """Find an available TCP port."""
-    import socket
-
+def find_free_port(host: str = DEFAULT_HOST) -> int:
+    """Find an available TCP port on the given host."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
+        s.bind((host, 0))
         s.listen(1)
         port = s.getsockname()[1]
         return port

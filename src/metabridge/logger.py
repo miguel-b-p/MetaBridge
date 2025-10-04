@@ -24,14 +24,12 @@ def get_logger(name: Optional[str] = "metabridge") -> logging.Logger:
     handler = RichHandler(
         console=_console,
         show_time=True,
-        show_path=False,
+        show_level=True,
+        show_path=True,
         markup=True,
+        rich_tracebacks=True,
+        tracebacks_show_locals=True,  # Mostra variáveis locais em tracebacks
     )
-    formatter = logging.Formatter(
-        fmt="%(message)s",
-        datefmt="[%X]",
-    )
-    handler.setFormatter(formatter)
 
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)

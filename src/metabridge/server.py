@@ -315,8 +315,9 @@ class ServiceServer:
         )
         register_service(record)
         if self._logger:
+            endpoints_count = len(self._registry)
             self._logger.info(
-                f"Service [bold cyan]'{self.name}'[/bold cyan] published on [green]{self._host}:{self._port}[/green] (PID: {record.pid})"
+                f"Service [bold cyan]'{self.name}'[/bold cyan] published with [bold yellow]{endpoints_count}[/bold yellow] endpoint(s) on [green]{self._host}:{self._port}[/green] (PID: {record.pid})"
             )
         atexit.register(
             lambda: unregister_service(record.name, expected_pid=record.pid)
@@ -345,13 +346,15 @@ class ServiceServer:
 
     def _serve_loop(self) -> None:
         """Main server loop accepting connections."""
+        if self._logger:
+            self._logger.info("Server loop started, listening for connections...")
         while self._running.is_set():
             try:
                 # Accept with timeout to check running flag periodically
                 if self._server_socket is None:
                     break
                 self._server_socket.settimeout(0.1)
-                client_socket, _ = self._server_socket.accept()
+                client_socket, addr = self._server_socket.accept()
 
                 # Handle in thread pool for concurrency
                 if self._executor:
@@ -367,7 +370,15 @@ class ServiceServer:
 
     def _handle_client(self, client_socket: socket.socket) -> None:
         """Handle a single client connection."""
+        client_addr = "unknown"
         try:
+            peer = client_socket.getpeername()
+            client_addr = f"{peer[0]}:{peer[1]}"
+            if self._logger:
+                self._logger.info(
+                    f"Client connected: [bold magenta]{client_addr}[/bold magenta]"
+                )
+
             client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
             while self._running.is_set():
@@ -402,12 +413,23 @@ class ServiceServer:
                 )
 
         except Exception:
-            pass
+            if self._logger:
+                self._logger.error(f"Error handling client {client_addr}", exc_info=True)
         finally:
+            if self._logger:
+                self._logger.info(
+                    f"Client disconnected: [bold magenta]{client_addr}[/bold magenta]"
+                )
             client_socket.close()
 
     def handle_request(self, request: JsonDict) -> JsonDict:
         """Process a request and return response."""
+
+        def _truncate(s: Any, max_len: int = 100) -> str:
+            """Truncates a string representation."""
+            s_repr = repr(s)
+            return s_repr[:max_len] + "..." if len(s_repr) > max_len else s_repr
+
         command = request.get("type")
 
         if command == "list_endpoints":
@@ -446,8 +468,13 @@ class ServiceServer:
         try:
             result = callable_entry.invoke(args, kwargs, ctor_args, ctor_kwargs)
             if self._logger:
+                log_args = ", ".join(_truncate(a) for a in args)
+                log_kwargs = ", ".join(f"{k}={_truncate(v)}" for k, v in kwargs.items())
+                full_args = f"({log_args}{', ' if log_args and log_kwargs else ''}{log_kwargs})"
+                log_result = _truncate(result, max_len=120)
+
                 self._logger.info(
-                    f"Call to '[bold green]{self._name}.{endpoint}[/bold green]' -> [cyan]Success[/cyan]"
+                    f"Call [bold green]{self._name}.{endpoint}{full_args}[/bold green] -> [cyan]Success[/cyan] | Result: [yellow]{log_result}[/yellow]"
                 )
             return {"status": "ok", "result": result}
         except Exception as exc:

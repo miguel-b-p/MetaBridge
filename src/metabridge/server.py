@@ -21,6 +21,7 @@ import msgpack
 
 from .config import DEFAULT_HOST
 from .exceptions import MetaBridgeError, ServiceNotFound
+from .logger import get_logger
 from .registry import (
     ServiceRecord,
     find_free_port,
@@ -170,7 +171,9 @@ class RegisteredFunction:
 class ServiceServer:
     """High-performance server using TCP sockets for ultra-low latency."""
 
-    def __init__(self, name: str, host: Optional[str] = None) -> None:
+    def __init__(
+        self, name: str, host: Optional[str] = None, *, logger: bool = False
+    ) -> None:
         self._name = name
         self._registry: Dict[str, RegisteredFunction] = {}
         self._lock = threading.Lock()
@@ -180,6 +183,11 @@ class ServiceServer:
         self._running = threading.Event()
         self._record: Optional[ServiceRecord] = None
         self._frozen = False
+
+        self._logger_enabled = logger
+        self._logger = (
+            get_logger(f"metabridge.service.{name}") if self._logger_enabled else None
+        )
 
         # Thread pool for concurrent request handling
         self._executor: Optional[ThreadPoolExecutor] = None
@@ -259,6 +267,12 @@ class ServiceServer:
         self._server_thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:
+        if not self._running.is_set() and self._server_thread is None:
+            return
+
+        if self._logger:
+            self._logger.info(f"Service [bold cyan]'{self.name}'[/bold cyan] stopping...")
+
         self._running.clear()
 
         # Close server socket to interrupt accept()
@@ -285,6 +299,9 @@ class ServiceServer:
             unregister_service(self._name, expected_pid=self._record.pid)
             self._record = None
 
+        if self._logger:
+            self._logger.info(f"Service [bold cyan]'{self.name}'[/bold cyan] stopped.")
+
     def set_frozen(self, value: bool) -> None:
         with self._lock:
             self._frozen = value
@@ -297,6 +314,11 @@ class ServiceServer:
             name=self._name, host=self._host, port=self._port, pid=os.getpid()
         )
         register_service(record)
+        if self._logger:
+            endpoints_count = len(self._registry)
+            self._logger.info(
+                f"Service [bold cyan]'{self.name}'[/bold cyan] published with [bold yellow]{endpoints_count}[/bold yellow] endpoint(s) on [green]{self._host}:{self._port}[/green] (PID: {record.pid})"
+            )
         atexit.register(
             lambda: unregister_service(record.name, expected_pid=record.pid)
         )
@@ -324,13 +346,15 @@ class ServiceServer:
 
     def _serve_loop(self) -> None:
         """Main server loop accepting connections."""
+        if self._logger:
+            self._logger.info("Server loop started, listening for connections...")
         while self._running.is_set():
             try:
                 # Accept with timeout to check running flag periodically
                 if self._server_socket is None:
                     break
                 self._server_socket.settimeout(0.1)
-                client_socket, _ = self._server_socket.accept()
+                client_socket, addr = self._server_socket.accept()
 
                 # Handle in thread pool for concurrency
                 if self._executor:
@@ -346,7 +370,15 @@ class ServiceServer:
 
     def _handle_client(self, client_socket: socket.socket) -> None:
         """Handle a single client connection."""
+        client_addr = "unknown"
         try:
+            peer = client_socket.getpeername()
+            client_addr = f"{peer[0]}:{peer[1]}"
+            if self._logger:
+                self._logger.info(
+                    f"Client connected: [bold magenta]{client_addr}[/bold magenta]"
+                )
+
             client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
             while self._running.is_set():
@@ -381,12 +413,23 @@ class ServiceServer:
                 )
 
         except Exception:
-            pass
+            if self._logger:
+                self._logger.error(f"Error handling client {client_addr}", exc_info=True)
         finally:
+            if self._logger:
+                self._logger.info(
+                    f"Client disconnected: [bold magenta]{client_addr}[/bold magenta]"
+                )
             client_socket.close()
 
     def handle_request(self, request: JsonDict) -> JsonDict:
         """Process a request and return response."""
+
+        def _truncate(s: Any, max_len: int = 100) -> str:
+            """Truncates a string representation."""
+            s_repr = repr(s)
+            return s_repr[:max_len] + "..." if len(s_repr) > max_len else s_repr
+
         command = request.get("type")
 
         if command == "list_endpoints":
@@ -410,6 +453,10 @@ class ServiceServer:
         callable_entry = self._registry.get(endpoint)
 
         if callable_entry is None:
+            if self._logger:
+                self._logger.warning(
+                    f"Request for unknown endpoint '[bold yellow]{endpoint}[/bold yellow]'"
+                )
             return {
                 "status": "error",
                 "error": {
@@ -420,8 +467,22 @@ class ServiceServer:
 
         try:
             result = callable_entry.invoke(args, kwargs, ctor_args, ctor_kwargs)
+            if self._logger:
+                log_args = ", ".join(_truncate(a) for a in args)
+                log_kwargs = ", ".join(f"{k}={_truncate(v)}" for k, v in kwargs.items())
+                full_args = f"({log_args}{', ' if log_args and log_kwargs else ''}{log_kwargs})"
+                log_result = _truncate(result, max_len=120)
+
+                self._logger.info(
+                    f"Call [bold green]{self._name}.{endpoint}{full_args}[/bold green] -> [cyan]Success[/cyan] | Result: [yellow]{log_result}[/yellow]"
+                )
             return {"status": "ok", "result": result}
         except Exception as exc:
+            if self._logger:
+                self._logger.error(
+                    f"Call to '[bold red]{self._name}.{endpoint}[/bold red]' -> [magenta]Failed[/magenta]",
+                    exc_info=True,
+                )
             return {
                 "status": "error",
                 "error": {"type": exc.__class__.__name__, "message": str(exc)},
@@ -541,6 +602,7 @@ class DaemonServiceBuilder(ServiceBuilder):
 
         self._server.set_frozen(True)
         self._server.stop()
+        logger_enabled = self._server._logger_enabled
 
         def _cleanup(handle: DaemonHandle) -> None:
             if self._handle is handle:
@@ -549,7 +611,7 @@ class DaemonServiceBuilder(ServiceBuilder):
             self._server.set_frozen(False)
 
         process = _spawn_daemon_process(
-            self._server.name, endpoints, poll_interval
+            self._server.name, endpoints, poll_interval, logger_enabled
         )
         handle = DaemonHandle(self._server.name, process, cleanup=_cleanup)
 
@@ -571,13 +633,18 @@ class DaemonServiceBuilder(ServiceBuilder):
         return handle
 
 
-def create_service(name: str, host: Optional[str] = None) -> ServiceBuilder:
-    server = ServiceServer(name=name, host=host)
+def create_service(
+    name: str, host: Optional[str] = None, *, logger: bool = False
+) -> ServiceBuilder:
+    server = ServiceServer(name=name, host=host, logger=logger)
     return ServiceBuilder(server)
 
 
 def _spawn_daemon_process(
-    name: str, endpoints: List[EndpointSpec], poll_interval: float
+    name: str,
+    endpoints: List[EndpointSpec],
+    poll_interval: float,
+    logger_enabled: bool,
 ) -> multiprocessing.Process:
     try:
         ctx: BaseContext = multiprocessing.get_context("fork")
@@ -586,7 +653,7 @@ def _spawn_daemon_process(
 
     process = ctx.Process(
         target=_daemon_worker,
-        args=(name, endpoints, poll_interval),
+        args=(name, endpoints, poll_interval, logger_enabled),
         daemon=False,
         name=f"MetaBridge-daemon[{name}]",
     )
@@ -595,9 +662,12 @@ def _spawn_daemon_process(
 
 
 def _daemon_worker(
-    name: str, endpoints: List[EndpointSpec], poll_interval: float
+    name: str,
+    endpoints: List[EndpointSpec],
+    poll_interval: float,
+    logger_enabled: bool,
 ) -> None:
-    server = ServiceServer(name)
+    server = ServiceServer(name, logger=logger_enabled)
     for endpoint_name, func in endpoints:
         server.register(endpoint_name, func)
     server.run_forever(poll_interval=poll_interval)

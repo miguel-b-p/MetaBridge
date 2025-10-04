@@ -6,7 +6,7 @@ import asyncio
 import metabridge as meta
 
 
-@meta.create("demo-service").daemon()
+@meta.create("demo-service", logger=True).daemon()
 class Service:
     """Namespace grouping the service endpoints."""
 

@@ -26,7 +26,7 @@ __all__ = [
     "run",
     "connect",
     "endpoint",
-    "function", # Adicionado para clareza
+    "function",  # Adicionado para clareza
 ]
 
 
@@ -37,11 +37,15 @@ def _mark_endpoint(func: Callable[..., Any], alias: Optional[str]) -> Callable[.
     setattr(func, "metabridge_endpoint", alias)
     return func
 
+
 # Sobrecargas para melhor suporte a tipos e autocompletar no editor.
 @overload
 def endpoint(func: Callable[..., Any]) -> Callable[..., Any]: ...
+
+
 @overload
 def endpoint(*, name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
+
 
 def endpoint(
     func: Optional[Callable[..., Any]] = None, *, name: Optional[str] = None
@@ -83,9 +87,11 @@ def __getattr__(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]
 class _ServiceRegistration:
     """Holds metadata about a declared MetaBridge service."""
 
-    def __init__(self, name: str, host: Optional[str] = None) -> None:
+    def __init__(
+        self, name: str, host: Optional[str] = None, *, logger: bool = False
+    ) -> None:
         self.name = name
-        self._builder = create_service(name, host=host)
+        self._builder = create_service(name, host=host, logger=logger)
         self._daemon_builder: Optional[DaemonServiceBuilder] = None
         self._class: Optional[type] = None
         self._seen_endpoints: set[str] = set()
@@ -132,7 +138,9 @@ class _ServiceRegistration:
         startup_timeout: float = 5.0,
     ) -> DaemonHandle:
         builder = self._ensure_daemon_builder()
-        return builder.run(wait=wait, poll_interval=poll_interval, startup_timeout=startup_timeout)
+        return builder.run(
+            wait=wait, poll_interval=poll_interval, startup_timeout=startup_timeout
+        )
 
 
 class _ServiceClassDecorator:
@@ -153,7 +161,9 @@ def _extract_callable(member: Any) -> tuple[Optional[Callable[..., Any]], str]:
     return None, ""
 
 
-def _annotate_endpoint(func: Callable[..., Any], owner: type, attr_name: str, descriptor: str) -> None:
+def _annotate_endpoint(
+    func: Callable[..., Any], owner: type, attr_name: str, descriptor: str
+) -> None:
     setattr(func, "metabridge_owner", owner)
     setattr(func, "metabridge_attr", attr_name)
     setattr(func, "metabridge_descriptor", descriptor)
@@ -163,11 +173,13 @@ _SERVICE_REGISTRY: Dict[str, _ServiceRegistration] = {}
 _LAST_REGISTRATION: Optional[_ServiceRegistration] = None
 
 
-def create(name: str, host: Optional[str] = None) -> _ServiceRegistration:
+def create(
+    name: str, host: Optional[str] = None, *, logger: bool = False
+) -> _ServiceRegistration:
     """Create (or retrieve) a MetaBridge service registration for the given name."""
     registration = _SERVICE_REGISTRY.get(name)
     if registration is None:
-        registration = _ServiceRegistration(name, host=host)
+        registration = _ServiceRegistration(name, host=host, logger=logger)
         _SERVICE_REGISTRY[name] = registration
     global _LAST_REGISTRATION
     _LAST_REGISTRATION = registration
@@ -179,7 +191,9 @@ def _resolve_registration(name: Optional[str]) -> _ServiceRegistration:
         try:
             return _SERVICE_REGISTRY[name]
         except KeyError as exc:
-            raise MetaBridgeError(f"Service '{name}' was not registered via metabridge.create().") from exc
+            raise MetaBridgeError(
+                f"Service '{name}' was not registered via metabridge.create()."
+            ) from exc
     if _LAST_REGISTRATION is None:
         raise MetaBridgeError("No MetaBridge service has been registered yet.")
     return _LAST_REGISTRATION
@@ -194,7 +208,9 @@ def run(
 ) -> DaemonHandle:
     """Launch the given service in daemon mode."""
     registration = _resolve_registration(name)
-    return registration.run(wait=wait, poll_interval=poll_interval, startup_timeout=startup_timeout)
+    return registration.run(
+        wait=wait, poll_interval=poll_interval, startup_timeout=startup_timeout
+    )
 
 
 def connect(
